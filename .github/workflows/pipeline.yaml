@@ -1,0 +1,61 @@
+name: DVC experiment report
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: iterative/setup-dvc@v1
+      - uses: iterative/setup-cml@v2
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Configure DagsHub credentials
+        env:
+          DAGSHUB_USER: ${{ secrets.DAGSHUB_USER }}
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          dvc remote modify --local origin auth basic
+          dvc remote modify --local origin user "$DAGSHUB_USER"
+          dvc remote modify --local origin password "$DAGSHUB_TOKEN"
+
+      - name: Pull dataset from DagsHub
+        run: dvc pull data/raw/iris.csv
+
+      - name: Reproduce pipeline
+        run: dvc repro
+
+      - name: Build and post CML report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin main:main
+          {
+            echo "## Iris experiment report"
+            echo
+            echo "### Metrics (PR vs main)"
+            dvc metrics diff main --md
+            echo
+            echo "### Parameters (PR vs main)"
+            dvc params diff main --md
+            echo
+            echo "### Confusion matrix"
+            echo "![Confusion matrix](./plots/confusion_matrix.png)"
+          } > report.md
+          cml comment create --publish report.md
